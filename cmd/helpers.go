@@ -122,3 +122,31 @@ func filterByFolder(paths []string, folder string) []string {
 	}
 	return filtered
 }
+
+// isPathWithinVault validates that a path is within the vault boundary (security check).
+func isPathWithinVault(path, vaultPath string) bool {
+	absVault, err := filepath.Abs(vaultPath)
+	if err != nil {
+		return false
+	}
+	absVault = filepath.Clean(absVault)
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absPath = filepath.Clean(absPath)
+
+	// Use path separator to prevent prefix attacks
+	vaultPrefix := absVault + string(filepath.Separator)
+	return absPath == absVault || strings.HasPrefix(absPath, vaultPrefix)
+}
+
+// truncateRunes truncates a string to at most n runes, adding "..." if truncated.
+func truncateRunes(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n-3]) + "..."
+}

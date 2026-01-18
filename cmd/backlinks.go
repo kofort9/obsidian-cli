@@ -224,11 +224,3 @@ func printBacklinksText(backlinks []BacklinkResult, targetNote string) {
 	}
 	fmt.Println()
 }
-
-func truncateRunes(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen-3]) + "..."
-}
