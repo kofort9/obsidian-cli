@@ -1,0 +1,11 @@
+# Binaries
+obsidian-cli
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
