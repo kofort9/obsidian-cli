@@ -7,6 +7,9 @@ Fast CLI for Obsidian vault operations. Built in Go for speed - 20-40x faster th
 - **Concurrent scanning** - Uses goroutines for parallel file processing
 - **Health checks** - Detect orphan files, dead links, and frontmatter issues
 - **Vault statistics** - Breakdown by folder with visual bar charts
+- **Orphan listing** - Find and export unlinked files
+- **Dead link listing** - Export broken links (JSON, CSV, text)
+- **Backlink search** - Find all notes linking to a specific note
 - **Security hardened** - Path traversal and symlink escape protection
 
 ## Installation

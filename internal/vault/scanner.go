@@ -41,17 +41,17 @@ type FileInfo struct {
 }
 
 var (
-	// Matches [[wikilinks]] and [[wikilinks|alias]]
-	wikilinkRegex = regexp.MustCompile(`\[\[([^\]|]+)(?:\|[^\]]+)?\]\]`)
+	// WikilinkRegex matches [[wikilinks]] and [[wikilinks|alias]]
+	WikilinkRegex = regexp.MustCompile(`\[\[([^\]|]+)(?:\|[^\]]+)?\]\]`)
 	// Matches YAML frontmatter
 	frontmatterRegex = regexp.MustCompile(`(?s)^---\n.*?\n---`)
 	// Matches embed syntax ![[file]]
 	embedRegex = regexp.MustCompile(`!\[\[([^\]|]+)(?:\|[^\]]+)?\]\]`)
 )
 
-// normalizeLink removes heading anchors (#) and block references (^) from links
+// NormalizeLink removes heading anchors (#) and block references (^) from links
 // [[note#heading]] -> note, [[note^block-id]] -> note
-func normalizeLink(link string) string {
+func NormalizeLink(link string) string {
 	// Check for heading anchor first, then block reference
 	if base, _, found := strings.Cut(link, "#"); found {
 		return base
@@ -284,7 +284,7 @@ func processFile(path, vaultPath string, existingFiles, existingFolders map[stri
 		}
 
 		// Find wikilinks on this line (both regular and embeds)
-		allMatches := wikilinkRegex.FindAllStringSubmatch(line, -1)
+		allMatches := WikilinkRegex.FindAllStringSubmatch(line, -1)
 		embedMatches := embedRegex.FindAllStringSubmatch(line, -1)
 		allMatches = append(allMatches, embedMatches...)
 
@@ -293,7 +293,7 @@ func processFile(path, vaultPath string, existingFiles, existingFolders map[stri
 				target := match[1]
 
 				// Normalize: remove heading anchors and block references
-				target = normalizeLink(target)
+				target = NormalizeLink(target)
 
 				// Skip empty targets (e.g., [[#heading]] becomes empty)
 				if target == "" {
