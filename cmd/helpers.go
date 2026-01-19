@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -142,11 +144,146 @@ func isPathWithinVault(path, vaultPath string) bool {
 	return absPath == absVault || strings.HasPrefix(absPath, vaultPrefix)
 }
 
+// shouldSkipEntry checks if a directory entry should be skipped during vault traversal.
+// Returns true if the entry is a hidden directory, an unresolvable symlink, or a symlink
+// pointing outside the vault boundary.
+func shouldSkipEntry(path string, d os.DirEntry, absVaultPath string) (skip bool, skipDir bool) {
+	// Skip hidden directories
+	if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+		return true, true
+	}
+
+	// Security: Check for symlinks that escape vault boundary
+	if d.Type()&os.ModeSymlink != 0 {
+		target, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return true, false // Skip unresolvable symlinks
+		}
+		if !isPathWithinVault(target, absVaultPath) {
+			return true, false // Skip symlinks pointing outside vault
+		}
+	}
+
+	return false, false
+}
+
 // truncateRunes truncates a string to at most n runes, adding "..." if truncated.
 func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	runes := []rune(s)
 	if len(runes) <= n {
 		return s
 	}
+	if n <= 3 {
+		return string(runes[:n])
+	}
 	return string(runes[:n-3]) + "..."
+}
+
+// newLargeScanner creates a bufio.Scanner with a 1MB buffer limit.
+// The default 64KB limit can cause "token too long" errors on files
+// with very long lines (e.g., embedded base64, long URLs).
+func newLargeScanner(file *os.File) *bufio.Scanner {
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024) // Max 1MB per line
+	return scanner
+}
+
+// mustRelPath returns a relative path or the original path if relativization fails.
+func mustRelPath(base, path string) string {
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		return path
+	}
+	return rel
+}
+
+// findNoteFile finds a note by name within the vault, supporting case-insensitive matching.
+// noteName can be a basename ("my-note") or a relative path ("concepts/my-note").
+// Returns an error if multiple files match the basename (use full path to disambiguate).
+func findNoteFile(absPath, noteName string) (string, error) {
+	noteLower := strings.ToLower(noteName)
+	noteBaseLower := strings.ToLower(filepath.Base(noteName))
+
+	var exactMatch string    // Exact path match
+	var baseMatches []string // Basename-only matches
+
+	err := filepath.WalkDir(absPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+		if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".md") {
+			relPath, _ := filepath.Rel(absPath, path)
+			baseName := strings.TrimSuffix(filepath.Base(path), ".md")
+			relName := strings.TrimSuffix(relPath, ".md")
+
+			// Exact path match takes priority
+			if strings.ToLower(relName) == noteLower {
+				exactMatch = path
+				return filepath.SkipAll // Found exact match, stop searching
+			}
+
+			// Track basename matches
+			if strings.ToLower(baseName) == noteBaseLower {
+				baseMatches = append(baseMatches, relPath)
+			}
+		}
+		return nil
+	})
+
+	if err != nil && err != filepath.SkipAll {
+		return "", fmt.Errorf("search failed: %w", err)
+	}
+
+	// Exact path match always wins
+	if exactMatch != "" {
+		// Security: Verify symlinks don't escape vault
+		info, err := os.Lstat(exactMatch)
+		if err != nil {
+			return "", fmt.Errorf("cannot access %s: %w", noteName, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := filepath.EvalSymlinks(exactMatch)
+			if err != nil {
+				return "", fmt.Errorf("cannot resolve symlink %s: %w", noteName, err)
+			}
+			if !isPathWithinVault(target, absPath) {
+				return "", fmt.Errorf("note symlink escapes vault: %s", noteName)
+			}
+		}
+		return exactMatch, nil
+	}
+
+	// Handle basename matches
+	if len(baseMatches) == 0 {
+		return "", fmt.Errorf("note not found: %s", noteName)
+	}
+	if len(baseMatches) > 1 {
+		return "", fmt.Errorf("ambiguous note name %q matches multiple files: %v (use full path to disambiguate)", noteName, baseMatches)
+	}
+
+	foundPath := filepath.Join(absPath, baseMatches[0])
+
+	// Security: Verify symlinks don't escape vault
+	info, err := os.Lstat(foundPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot access %s: %w", baseMatches[0], err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := filepath.EvalSymlinks(foundPath)
+		if err != nil {
+			return "", fmt.Errorf("cannot resolve symlink %s: %w", baseMatches[0], err)
+		}
+		if !isPathWithinVault(target, absPath) {
+			return "", fmt.Errorf("note symlink escapes vault: %s", baseMatches[0])
+		}
+	}
+
+	return foundPath, nil
 }

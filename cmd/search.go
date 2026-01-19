@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,11 +12,12 @@ import (
 )
 
 var (
-	searchFormat      string
-	searchLimit       int
-	searchContext     int
+	searchFormat        string
+	searchLimit         int
+	searchContext       int
 	searchCaseSensitive bool
-	searchRegex       bool
+	searchRegex         bool
+	searchFolder        string
 )
 
 var searchCmd = &cobra.Command{
@@ -45,6 +45,7 @@ func init() {
 	searchCmd.Flags().IntVarP(&searchContext, "context", "C", 0, "Lines of context around matches")
 	searchCmd.Flags().BoolVarP(&searchCaseSensitive, "case-sensitive", "s", false, "Case-sensitive search")
 	searchCmd.Flags().BoolVarP(&searchRegex, "regex", "r", false, "Treat query as regular expression")
+	searchCmd.Flags().StringVarP(&searchFolder, "folder", "f", "", "Filter to specific folder")
 }
 
 // SearchMatch represents a single search match.
@@ -85,6 +86,18 @@ func executeSearch(query string) (*SearchResult, error) {
 		return nil, fmt.Errorf("invalid vault path: %w", err)
 	}
 
+	// Determine scan root (vault root or specific folder)
+	scanRoot := absPath
+	if searchFolder != "" {
+		scanRoot = filepath.Join(absPath, searchFolder)
+		if !isPathWithinVault(scanRoot, absPath) {
+			return nil, fmt.Errorf("folder path escapes vault boundary: %s", searchFolder)
+		}
+		if _, err := os.Stat(scanRoot); os.IsNotExist(err) {
+			return nil, fmt.Errorf("folder not found: %s", searchFolder)
+		}
+	}
+
 	// Build the search pattern
 	patternStr := query
 	if !searchRegex {
@@ -101,22 +114,15 @@ func executeSearch(query string) (*SearchResult, error) {
 
 	var matches []SearchMatch
 
-	err = filepath.WalkDir(absPath, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
-		// Security: Check for symlinks that escape vault boundary
-		if d.Type()&os.ModeSymlink != 0 {
-			target, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				return nil // Skip unresolvable symlinks
+		if skip, skipDir := shouldSkipEntry(path, d, absPath); skip {
+			if skipDir {
+				return filepath.SkipDir
 			}
-			if !isPathWithinVault(target, absPath) {
-				return nil // Skip symlinks pointing outside vault
-			}
+			return nil
 		}
 		if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".md") {
 			relPath, _ := filepath.Rel(absPath, path)
@@ -146,7 +152,7 @@ func searchFile(path, relPath string, pattern *regexp.Regexp) []SearchMatch {
 	var matches []SearchMatch
 	var lines []string
 
-	scanner := bufio.NewScanner(file)
+	scanner := newLargeScanner(file)
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}

@@ -33,11 +33,11 @@ type DeadLink struct {
 
 // FileInfo holds parsed info about a markdown file
 type FileInfo struct {
-	Path          string
-	RelPath       string
+	Path           string
+	RelPath        string
 	HasFrontmatter bool
-	OutgoingLinks []string
-	WordCount     int
+	OutgoingLinks  []string
+	WordCount      int
 }
 
 var (
@@ -272,6 +272,9 @@ func processFile(path, vaultPath string, existingFiles, existingFolders map[stri
 	relPath, _ := filepath.Rel(vaultPath, path)
 
 	scanner := bufio.NewScanner(file)
+	// Increase buffer from default 64KB to 1MB for files with long lines
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
 	lineNum := 0
 	hasFrontmatter := false
 	for scanner.Scan() {

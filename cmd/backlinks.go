@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -94,8 +93,11 @@ func collectMarkdownFiles(absPath string) ([]string, error) {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
+		if skip, skipDir := shouldSkipEntry(path, d, absPath); skip {
+			if skipDir {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".md") {
 			mdFiles = append(mdFiles, path)
@@ -140,7 +142,7 @@ func scanFileForBacklinks(filePath, relPath, targetBaseName, targetLower string)
 	defer file.Close()
 
 	var results []BacklinkResult
-	scanner := bufio.NewScanner(file)
+	scanner := newLargeScanner(file)
 	lineNum := 0
 
 	for scanner.Scan() {

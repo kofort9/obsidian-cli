@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 )
 
 var renameDryRun bool
+var renameFormat string
 
 var renameCmd = &cobra.Command{
 	Use:   "rename <old-name> <new-name>",
@@ -42,6 +42,7 @@ Examples:
 func init() {
 	rootCmd.AddCommand(renameCmd)
 	renameCmd.Flags().BoolVar(&renameDryRun, "dry-run", false, "Preview changes without modifying files")
+	renameCmd.Flags().StringVar(&renameFormat, "format", "text", "Output format: text, json")
 }
 
 // RenameChange represents a single file modification.
@@ -54,20 +55,22 @@ type RenameChange struct {
 
 // RenameResult holds the rename operation results.
 type RenameResult struct {
-	SourceFile     string         `json:"source_file"`
-	DestFile       string         `json:"dest_file"`
-	BacklinkCount  int            `json:"backlink_count"`
-	Changes        []RenameChange `json:"changes"`
-	FilesModified  int            `json:"files_modified"`
-	LinksUpdated   int            `json:"links_updated"`
-	Executed       bool           `json:"executed"`
+	SourceFile    string         `json:"source_file"`
+	DestFile      string         `json:"dest_file"`
+	BacklinkCount int            `json:"backlink_count"`
+	Changes       []RenameChange `json:"changes"`
+	FilesModified int            `json:"files_modified"`
+	LinksUpdated  int            `json:"links_updated"`
+	Executed      bool           `json:"executed"`
 }
 
 func runRename(cmd *cobra.Command, args []string) error {
 	oldName := strings.TrimSuffix(args[0], ".md")
 	newName := strings.TrimSuffix(args[1], ".md")
 
-	fmt.Printf("\n%s Rename: %s -> %s\n\n", colors.Cyan("=>"), colors.Yellow(oldName), colors.Green(newName))
+	if renameFormat != "json" {
+		fmt.Printf("\n%s Rename: %s -> %s\n\n", colors.Cyan("=>"), colors.Yellow(oldName), colors.Green(newName))
+	}
 
 	start := time.Now()
 
@@ -134,7 +137,17 @@ func runRename(cmd *cobra.Command, args []string) error {
 	result.FilesModified = len(filesAffected)
 	result.LinksUpdated = len(result.Changes)
 
-	// Output preview
+	// JSON output mode
+	if renameFormat == "json" {
+		if !renameDryRun {
+			if err := executeRename(absPath, sourceFile, destFile, result.Changes, oldName, newName, true); err != nil {
+				return err
+			}
+		}
+		return encodeJSON(cmd, result)
+	}
+
+	// Text output mode
 	printRenamePreview(result, elapsed)
 
 	if renameDryRun {
@@ -143,49 +156,7 @@ func runRename(cmd *cobra.Command, args []string) error {
 	}
 
 	// Execute the rename
-	return executeRename(absPath, sourceFile, destFile, result.Changes, oldName, newName)
-}
-
-func findNoteFile(absPath, noteName string) (string, error) {
-	noteLower := strings.ToLower(noteName)
-	noteBaseLower := strings.ToLower(filepath.Base(noteName))
-
-	var found string
-	err := filepath.WalkDir(absPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
-		if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".md") {
-			relPath, _ := filepath.Rel(absPath, path)
-			baseName := strings.TrimSuffix(filepath.Base(path), ".md")
-			relName := strings.TrimSuffix(relPath, ".md")
-
-			// Match by full path or basename
-			if strings.ToLower(relName) == noteLower ||
-				strings.ToLower(baseName) == noteBaseLower {
-				if found != "" {
-					// Prefer exact path match
-					if strings.ToLower(relName) == noteLower {
-						found = path
-					}
-				} else {
-					found = path
-				}
-			}
-		}
-		return nil
-	})
-
-	if err != nil {
-		return "", fmt.Errorf("search failed: %w", err)
-	}
-	if found == "" {
-		return "", fmt.Errorf("note not found: %s", noteName)
-	}
-	return found, nil
+	return executeRename(absPath, sourceFile, destFile, result.Changes, oldName, newName, false)
 }
 
 func computeDestPath(absPath, sourceFile, newName string) string {
@@ -197,14 +168,6 @@ func computeDestPath(absPath, sourceFile, newName string) string {
 	// Otherwise, rename in same directory as source
 	dir := filepath.Dir(sourceFile)
 	return filepath.Join(dir, newName+".md")
-}
-
-func mustRelPath(base, path string) string {
-	rel, err := filepath.Rel(base, path)
-	if err != nil {
-		return path
-	}
-	return rel
 }
 
 func findBacklinksForRename(absPath string, mdFiles []string, targetNote string) []BacklinkResult {
@@ -236,7 +199,7 @@ func scanFileForRenameBacklinks(filePath, relPath, targetBaseName, targetLower s
 	defer file.Close()
 
 	var results []BacklinkResult
-	scanner := bufio.NewScanner(file)
+	scanner := newLargeScanner(file)
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -265,7 +228,7 @@ func scanFileForRenameBacklinks(filePath, relPath, targetBaseName, targetLower s
 	return results
 }
 
-func computeNewLinkContent(line, oldName, newName string) string {
+func computeNewLinkContent(content, oldName, newName string) string {
 	// Replace the old link with new link, preserving aliases
 	// [[old-name]] -> [[new-name]]
 	// [[old-name|alias]] -> [[new-name|alias]]
@@ -274,10 +237,10 @@ func computeNewLinkContent(line, oldName, newName string) string {
 	oldBase := filepath.Base(oldName)
 	newBase := filepath.Base(newName)
 
-	result := line
+	result := content
 
 	// Find all wikilinks and replace those matching the old name
-	matches := vault.WikilinkRegex.FindAllStringSubmatchIndex(line, -1)
+	matches := vault.WikilinkRegex.FindAllStringSubmatchIndex(content, -1)
 
 	// Process matches in reverse order to preserve indices
 	for i := len(matches) - 1; i >= 0; i-- {
@@ -289,7 +252,7 @@ func computeNewLinkContent(line, oldName, newName string) string {
 		// Extract the link target (group 1)
 		linkStart := match[2]
 		linkEnd := match[3]
-		linkTarget := line[linkStart:linkEnd]
+		linkTarget := content[linkStart:linkEnd]
 
 		// Check if this link matches the old name
 		normalizedTarget := vault.NormalizeLink(linkTarget)
@@ -352,8 +315,15 @@ func printRenamePreview(result *RenameResult, elapsed time.Duration) {
 	fmt.Printf("  %s %s\n", colors.Cyan("Analyzed in:"), elapsed.Round(time.Millisecond))
 }
 
-func executeRename(absPath, sourceFile, destFile string, changes []RenameChange, oldName, newName string) error {
-	fmt.Printf("\n%s Executing rename...\n\n", colors.Cyan("=>"))
+// executeRename performs the actual file rename and backlink updates.
+// WARNING: This operation is not atomic. If a write fails mid-operation,
+// some files will have updated links while others won't. Always use --dry-run
+// first to preview changes, and ensure you have backups or version control.
+// When quiet is true, no console output is produced (for JSON mode).
+func executeRename(absPath, sourceFile, destFile string, changes []RenameChange, oldName, newName string, quiet bool) error {
+	if !quiet {
+		fmt.Printf("\n%s Executing rename...\n\n", colors.Cyan("=>"))
+	}
 
 	// Group changes by file to process each file only once
 	// This prevents data loss when a file has multiple backlinks to the renamed note
@@ -367,22 +337,26 @@ func executeRename(absPath, sourceFile, destFile string, changes []RenameChange,
 	for file := range changesByFile {
 		fullPath := filepath.Join(absPath, file)
 
-		// Read the file once
+		// Security: Verify path is within vault (handles symlinked markdown files)
+		if !isPathWithinVault(fullPath, absPath) {
+			if !quiet {
+				fmt.Printf("  %s Skipped (security): %s\n", colors.Yellow("!"), file)
+			}
+			continue
+		}
+
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", file, err)
 		}
 
-		// Get original permissions to preserve them
 		info, err := os.Stat(fullPath)
 		if err != nil {
 			return fmt.Errorf("failed to stat %s: %w", file, err)
 		}
 
-		// Update ALL links in the file content at once
 		newContent := computeNewLinkContent(string(content), oldName, newName)
 
-		// Write back with original permissions
 		if err := os.WriteFile(fullPath, []byte(newContent), info.Mode()); err != nil {
 			return fmt.Errorf("failed to write %s (NOTE: %d files already modified): %w", file, linksUpdated, err)
 		}
@@ -395,19 +369,19 @@ func executeRename(absPath, sourceFile, destFile string, changes []RenameChange,
 		return fmt.Errorf("destination directory escapes vault boundary")
 	}
 
-	// Ensure destination directory exists
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	// Rename the file
 	if err := os.Rename(sourceFile, destFile); err != nil {
 		return fmt.Errorf("failed to rename file: %w", err)
 	}
 
-	relDest, _ := filepath.Rel(absPath, destFile)
-	fmt.Printf("  %s Renamed: %s\n", colors.Green("✓"), relDest)
-	fmt.Printf("  %s Updated links in %d files\n\n", colors.Green("✓"), len(changesByFile))
+	if !quiet {
+		relDest, _ := filepath.Rel(absPath, destFile)
+		fmt.Printf("  %s Renamed: %s\n", colors.Green("✓"), relDest)
+		fmt.Printf("  %s Updated links in %d files\n\n", colors.Green("✓"), len(changesByFile))
+	}
 
 	return nil
 }

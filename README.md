@@ -10,10 +10,11 @@ Fast CLI for Obsidian vault operations. Built in Go for speed - 20-40x faster th
 - **Orphan listing** - Find and export unlinked files
 - **Dead link listing** - Export broken links (JSON, CSV, text)
 - **Backlink search** - Find all notes linking to a specific note
+- **Outgoing links** - See what a note links to (valid vs dead)
 - **Tag discovery** - List all tags with counts, filter notes by tag
 - **Full-text search** - Search across notes with regex support
 - **Safe rename** - Rename notes and update all backlinks automatically
-- **Unused assets** - Find orphaned images, PDFs, and media files
+- **Unused assets** - Find and delete orphaned images, PDFs, and media files
 - **Security hardened** - Path traversal and symlink escape protection
 
 ## Installation
@@ -97,6 +98,9 @@ obsidian-cli tags --vault ~/Documents/Obsidian
 
 # Find notes with a specific tag
 obsidian-cli tags --vault ~/Documents/Obsidian --tag project
+
+# Filter to specific folder
+obsidian-cli tags --vault ~/Documents/Obsidian --folder concepts
 ```
 
 Output:
@@ -121,6 +125,41 @@ obsidian-cli search "func.*Error" --vault ~/Documents/Obsidian --regex
 
 # Case-sensitive with context
 obsidian-cli search "TODO" --vault ~/Documents/Obsidian --case-sensitive --context 2
+
+# Search within specific folder
+obsidian-cli search "pattern" --vault ~/Documents/Obsidian --folder sources
+```
+
+### Links
+
+Show outgoing links from a note (the inverse of backlinks):
+
+```bash
+# See all links from a note
+obsidian-cli links "my-note" --vault ~/Documents/Obsidian
+
+# Show only dead/broken links
+obsidian-cli links "my-note" --vault ~/Documents/Obsidian --dead-only
+
+# Include external URLs
+obsidian-cli links "my-note" --vault ~/Documents/Obsidian --include-external
+```
+
+Output:
+```
+→ Links from: concepts/api-design.md (15 total)
+
+  Valid (12):
+    [[authentication]]
+    [[rate-limiting]]
+    [[error-handling]]
+
+  Dead (2):
+    [[deprecated-pattern]] (not found)
+    [[old-concept]] (not found)
+
+  External (1):
+    https://example.com/docs
 ```
 
 ### Rename
@@ -133,6 +172,9 @@ obsidian-cli rename "old-note" "new-note" --vault ~/Documents/Obsidian --dry-run
 
 # Execute rename
 obsidian-cli rename "old-note" "new-note" --vault ~/Documents/Obsidian
+
+# JSON output for scripting
+obsidian-cli rename "old-note" "new-note" --vault ~/Documents/Obsidian --dry-run --format json
 ```
 
 ### Unused Assets
@@ -140,7 +182,14 @@ obsidian-cli rename "old-note" "new-note" --vault ~/Documents/Obsidian
 Find images, PDFs, and media not referenced in any note:
 
 ```bash
+# List unused assets
 obsidian-cli unused-assets --vault ~/Documents/Obsidian
+
+# Delete unused assets (with confirmation)
+obsidian-cli unused-assets --vault ~/Documents/Obsidian --delete
+
+# Export paths for scripting
+obsidian-cli unused-assets --vault ~/Documents/Obsidian --format paths
 ```
 
 Output:
@@ -151,6 +200,10 @@ Output:
     attachments/old-screenshot.png 2.3 MB
     attachments/unused-diagram.svg 1.1 MB
     ...
+
+  ? Delete 21 files (20.3 MB)? [y/N]: y
+
+  ✓ Deleted 21 files, freed 20.3 MB
 ```
 
 ## Performance

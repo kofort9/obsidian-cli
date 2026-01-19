@@ -16,6 +16,7 @@ import (
 var (
 	unusedFormat string
 	unusedLimit  int
+	unusedDelete bool
 )
 
 var unusedAssetsCmd = &cobra.Command{
@@ -38,7 +39,8 @@ Examples:
   obsidian-cli unused-assets --vault ~/Documents/Obsidian
   obsidian-cli unused-assets --vault ~/Documents/Obsidian --limit 20
   obsidian-cli unused-assets --vault ~/Documents/Obsidian --format json
-  obsidian-cli unused-assets --vault ~/Documents/Obsidian --format paths`,
+  obsidian-cli unused-assets --vault ~/Documents/Obsidian --format paths
+  obsidian-cli unused-assets --vault ~/Documents/Obsidian --delete`,
 	RunE: runUnusedAssets,
 }
 
@@ -46,22 +48,23 @@ func init() {
 	rootCmd.AddCommand(unusedAssetsCmd)
 	unusedAssetsCmd.Flags().StringVar(&unusedFormat, "format", "text", "Output format: text, json, paths")
 	unusedAssetsCmd.Flags().IntVarP(&unusedLimit, "limit", "n", 0, "Limit number of results (0 = no limit)")
+	unusedAssetsCmd.Flags().BoolVar(&unusedDelete, "delete", false, "Delete unused assets after confirmation")
 }
 
 // AssetInfo represents an unused asset file.
 type AssetInfo struct {
-	Path     string `json:"path"`
-	Size     int64  `json:"size"`
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
 	SizeHuman string `json:"size_human"`
-	Type     string `json:"type"`
+	Type      string `json:"type"`
 }
 
 // UnusedAssetsResult holds the scan results.
 type UnusedAssetsResult struct {
-	TotalAssets    int         `json:"total_assets"`
-	UnusedAssets   []AssetInfo `json:"unused_assets"`
-	TotalSize      int64       `json:"total_size"`
-	TotalSizeHuman string      `json:"total_size_human"`
+	TotalAssets    int           `json:"total_assets"`
+	UnusedAssets   []AssetInfo   `json:"unused_assets"`
+	TotalSize      int64         `json:"total_size"`
+	TotalSizeHuman string        `json:"total_size_human"`
 	Elapsed        time.Duration `json:"-"`
 }
 
@@ -118,18 +121,11 @@ func scanUnusedAssets() (*UnusedAssetsResult, error) {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
-		// Security: Check for symlinks that escape vault boundary
-		if d.Type()&os.ModeSymlink != 0 {
-			target, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				return nil // Skip unresolvable symlinks
+		if skip, skipDir := shouldSkipEntry(path, d, absPath); skip {
+			if skipDir {
+				return filepath.SkipDir
 			}
-			if !isPathWithinVault(target, absPath) {
-				return nil // Skip symlinks pointing outside vault
-			}
+			return nil
 		}
 		if d.IsDir() {
 			return nil
@@ -148,7 +144,7 @@ func scanUnusedAssets() (*UnusedAssetsResult, error) {
 	}
 
 	// Phase 2: Build set of referenced assets
-	referenced := collectReferencedAssets(absPath, mdFiles)
+	referenced := collectReferencedAssets(mdFiles)
 
 	// Phase 3: Find unused assets
 	var unused []AssetInfo
@@ -195,52 +191,48 @@ func scanUnusedAssets() (*UnusedAssetsResult, error) {
 	}, nil
 }
 
-func collectReferencedAssets(absPath string, mdFiles []string) map[string]bool {
+func collectReferencedAssets(mdFiles []string) map[string]bool {
 	referenced := make(map[string]bool)
 
 	for _, mdFile := range mdFiles {
-		file, err := os.Open(mdFile)
-		if err != nil {
-			continue
+		scanFileForAssetReferences(mdFile, referenced)
+	}
+
+	return referenced
+}
+
+func scanFileForAssetReferences(mdFile string, referenced map[string]bool) {
+	file, err := os.Open(mdFile)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	scanner := newLargeScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Find wikilink embeds and links
+		for _, match := range embedRegex.FindAllStringSubmatch(line, -1) {
+			if len(match) > 1 {
+				target := strings.ToLower(match[1])
+				referenced[target] = true
+				referenced[strings.ToLower(filepath.Base(target))] = true
+			}
 		}
 
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			line := scanner.Text()
-
-			// Find wikilink embeds and links
-			matches := embedRegex.FindAllStringSubmatch(line, -1)
-			for _, match := range matches {
-				if len(match) > 1 {
-					target := strings.ToLower(match[1])
-					// Store both full path and basename
+		// Find markdown image syntax
+		for _, match := range markdownImageRegex.FindAllStringSubmatch(line, -1) {
+			if len(match) > 1 {
+				target := strings.ToLower(match[1])
+				// Skip URLs
+				if !strings.HasPrefix(target, "http") {
 					referenced[target] = true
 					referenced[strings.ToLower(filepath.Base(target))] = true
 				}
 			}
-
-			// Find markdown image syntax
-			imgMatches := markdownImageRegex.FindAllStringSubmatch(line, -1)
-			for _, match := range imgMatches {
-				if len(match) > 1 {
-					target := strings.ToLower(match[1])
-					// Skip URLs
-					if !strings.HasPrefix(target, "http") {
-						referenced[target] = true
-						referenced[strings.ToLower(filepath.Base(target))] = true
-					}
-				}
-			}
 		}
-		// Check for scanner errors (buffer overflow, etc.)
-		if err := scanner.Err(); err != nil {
-			file.Close()
-			continue
-		}
-		file.Close()
 	}
-
-	return referenced
 }
 
 func humanizeBytes(bytes int64) string {
@@ -302,6 +294,97 @@ func outputUnusedAssets(cmd *cobra.Command, result *UnusedAssetsResult) error {
 
 		printLimitNote(total, unusedLimit)
 		printScanFooter(result.Elapsed)
+
+		// Handle delete if requested
+		if unusedDelete && len(result.UnusedAssets) > 0 {
+			fmt.Println()
+			if err := confirmAndDeleteAssets(result.UnusedAssets); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// confirmAndDeleteAssets prompts for confirmation and deletes unused assets.
+func confirmAndDeleteAssets(assets []AssetInfo) error {
+	var totalSize int64
+	for _, a := range assets {
+		totalSize += a.Size
+	}
+
+	// Prompt for confirmation
+	fmt.Printf("  %s Delete %d files (%s)? [y/N]: ",
+		colors.Yellow("?"),
+		len(assets),
+		humanizeBytes(totalSize))
+
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read input: %w", err)
+	}
+
+	response = strings.TrimSpace(strings.ToLower(response))
+	if response != "y" && response != "yes" {
+		fmt.Printf("\n  %s Cancelled. No files deleted.\n", colors.Yellow("!"))
+		return nil
+	}
+
+	fmt.Println()
+
+	// Delete files
+	absPath, err := filepath.Abs(vaultPath)
+	if err != nil {
+		return fmt.Errorf("invalid vault path: %w", err)
+	}
+
+	deleted := 0
+	failed := 0
+	var freedSize int64
+
+	for _, asset := range assets {
+		fullPath := filepath.Join(absPath, asset.Path)
+
+		// Security: Verify path is still within vault
+		if !isPathWithinVault(fullPath, absPath) {
+			fmt.Printf("  %s Skipped (security): %s\n", colors.Red("✗"), asset.Path)
+			failed++
+			continue
+		}
+
+		// Security: Check for symlinks (TOCTOU mitigation)
+		// File could have been replaced with symlink since scan
+		info, err := os.Lstat(fullPath)
+		if err != nil {
+			fmt.Printf("  %s Failed: %s (%v)\n", colors.Red("✗"), asset.Path, err)
+			failed++
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			fmt.Printf("  %s Skipped (symlink): %s\n", colors.Yellow("!"), asset.Path)
+			failed++
+			continue
+		}
+
+		if err := os.Remove(fullPath); err != nil {
+			fmt.Printf("  %s Failed: %s (%v)\n", colors.Red("✗"), asset.Path, err)
+			failed++
+		} else {
+			deleted++
+			freedSize += asset.Size
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("  %s Deleted %d files, freed %s\n",
+		colors.Green("✓"),
+		deleted,
+		humanizeBytes(freedSize))
+
+	if failed > 0 {
+		fmt.Printf("  %s Failed to delete %d files\n", colors.Red("!"), failed)
 	}
 
 	return nil

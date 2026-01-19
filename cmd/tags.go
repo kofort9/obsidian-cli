@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +16,7 @@ var (
 	tagsFormat string
 	tagsFilter string
 	tagsLimit  int
+	tagsFolder string
 )
 
 var tagsCmd = &cobra.Command{
@@ -41,6 +41,7 @@ func init() {
 	tagsCmd.Flags().StringVar(&tagsFormat, "format", "text", "Output format: text, json, paths")
 	tagsCmd.Flags().StringVarP(&tagsFilter, "tag", "t", "", "Filter notes by specific tag")
 	tagsCmd.Flags().IntVarP(&tagsLimit, "limit", "n", 0, "Limit number of results (0 = no limit)")
+	tagsCmd.Flags().StringVarP(&tagsFolder, "folder", "f", "", "Filter to specific folder")
 }
 
 // TagInfo represents a tag with its usage count and associated files.
@@ -91,24 +92,29 @@ func scanTags() (*TagScanResult, error) {
 		return nil, fmt.Errorf("invalid vault path: %w", err)
 	}
 
+	// Determine scan root (vault root or specific folder)
+	scanRoot := absPath
+	if tagsFolder != "" {
+		scanRoot = filepath.Join(absPath, tagsFolder)
+		if !isPathWithinVault(scanRoot, absPath) {
+			return nil, fmt.Errorf("folder path escapes vault boundary: %s", tagsFolder)
+		}
+		if _, err := os.Stat(scanRoot); os.IsNotExist(err) {
+			return nil, fmt.Errorf("folder not found: %s", tagsFolder)
+		}
+	}
+
 	tags := make(map[string]*TagInfo)
 
-	err = filepath.WalkDir(absPath, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
-		// Security: Check for symlinks that escape vault boundary
-		if d.Type()&os.ModeSymlink != 0 {
-			target, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				return nil // Skip unresolvable symlinks
+		if skip, skipDir := shouldSkipEntry(path, d, absPath); skip {
+			if skipDir {
+				return filepath.SkipDir
 			}
-			if !isPathWithinVault(target, absPath) {
-				return nil // Skip symlinks pointing outside vault
-			}
+			return nil
 		}
 		if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".md") {
 			relPath, _ := filepath.Rel(absPath, path)
@@ -133,7 +139,7 @@ func extractTagsFromFile(path, relPath string, tags map[string]*TagInfo) {
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
+	scanner := newLargeScanner(file)
 	inFrontmatter := false
 	frontmatterDone := false
 	inTagsList := false
@@ -210,9 +216,13 @@ func extractTagsFromFile(path, relPath string, tags map[string]*TagInfo) {
 				continue
 			}
 
-			// Skip headings (# Heading)
-			if strings.HasPrefix(strings.TrimSpace(line), "# ") {
-				continue
+			// Skip headings (# Heading, ## Heading, ###Heading, etc.)
+			trimmed := strings.TrimSpace(line)
+			if len(trimmed) > 0 && trimmed[0] == '#' {
+				// It's a heading if followed by space or more #
+				if len(trimmed) == 1 || trimmed[1] == ' ' || trimmed[1] == '#' {
+					continue
+				}
 			}
 
 			matches := inlineTagRegex.FindAllStringSubmatch(line, -1)
