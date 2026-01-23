@@ -15,6 +15,7 @@ Fast CLI for Obsidian vault operations. Built in Go for speed - 20-40x faster th
 - **Full-text search** - Search across notes with regex support
 - **Safe rename** - Rename notes and update all backlinks automatically
 - **Unused assets** - Find and delete orphaned images, PDFs, and media files
+- **Pattern querying** - Query and manage Claude patterns with staleness decay and similarity search
 - **Security hardened** - Path traversal and symlink escape protection
 
 ## Installation
@@ -205,6 +206,61 @@ Output:
 
   ✓ Deleted 21 files, freed 20.3 MB
 ```
+
+### Patterns
+
+Query and manage Claude Code patterns (uses `--patterns-dir` instead of `--vault`):
+
+```bash
+# List recent patterns
+obsidian-cli patterns --patterns-dir ~/.claude/patterns
+
+# Filter by domain and type
+obsidian-cli patterns --domain workflow --type success --limit 10
+
+# Search by keywords
+obsidian-cli patterns --keywords "batch parallel"
+
+# Find similar patterns
+obsidian-cli patterns --similar "error handling in API calls"
+
+# Show patterns from last 7 days with staleness info
+obsidian-cli patterns --recent 7 --verbose
+
+# View statistics
+obsidian-cli patterns --stats
+
+# Log a surfacing event (track which patterns were shown)
+obsidian-cli patterns --log-action accept --event-id latest
+
+# View surfacing effectiveness
+obsidian-cli patterns --surfacing-stats --surfacing-days 30
+```
+
+Output:
+```
+=> Patterns (42 matching, 156 total)
+
+  workflow (18)
+    batch-processing:2025-01-15  [0.85] Parallel API calls with rate limiting
+    error-retry:2025-01-14       [0.72] Exponential backoff for transient failures
+    ...
+
+  architecture (12)
+    hook-design:2025-01-16       [0.90] Event-driven hooks for extensibility
+    ...
+
+  Staleness: 8 fresh, 15 recent, 12 aging, 7 stale
+
+  Scanned in: 45ms
+```
+
+**Staleness Decay:**
+- Fresh (0-30 days): 100% confidence
+- Recent (30-90 days): 95% confidence
+- Aging (90-180 days): 85% confidence
+- Stale (180-365 days): 70% confidence
+- Ancient (365+ days): 50% confidence
 
 ## Performance
 
