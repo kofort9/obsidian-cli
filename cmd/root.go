@@ -30,6 +30,16 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&vaultPath, "vault", "v", "", "Path to Obsidian vault (required)")
-	rootCmd.MarkPersistentFlagRequired("vault")
+	rootCmd.PersistentFlags().StringVarP(&vaultPath, "vault", "v", "", "Path to Obsidian vault (required for most commands)")
+	// Note: vault is not globally required because the 'patterns' command doesn't need it.
+	// Commands that need vault should validate it in their RunE function.
+}
+
+// RequireVault validates that the vault flag was provided.
+// Commands that need vault should call this at the start of their RunE function.
+func RequireVault() error {
+	if vaultPath == "" {
+		return fmt.Errorf("required flag \"vault\" not set")
+	}
+	return nil
 }

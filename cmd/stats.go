@@ -31,6 +31,10 @@ func init() {
 }
 
 func runStats(cmd *cobra.Command, args []string) error {
+	if err := RequireVault(); err != nil {
+		return err
+	}
+
 	cyan := color.New(color.FgCyan).SprintFunc()
 	bold := color.New(color.Bold).SprintFunc()
 	dim := color.New(color.Faint).SprintFunc()

@@ -72,6 +72,10 @@ type LinksResult struct {
 var externalURLRegex = regexp.MustCompile(`https?://[^\s\)\]]+`)
 
 func runLinks(cmd *cobra.Command, args []string) error {
+	if err := RequireVault(); err != nil {
+		return err
+	}
+
 	noteName := strings.TrimSuffix(args[0], ".md")
 
 	if linksFormat == "text" {

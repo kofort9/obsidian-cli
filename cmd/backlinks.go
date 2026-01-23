@@ -49,6 +49,10 @@ type BacklinkResult struct {
 }
 
 func runBacklinks(cmd *cobra.Command, args []string) error {
+	if err := RequireVault(); err != nil {
+		return err
+	}
+
 	targetNote := strings.TrimSuffix(args[0], ".md")
 
 	if backlinksFormat == "text" {

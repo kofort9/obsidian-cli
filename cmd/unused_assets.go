@@ -93,6 +93,10 @@ var (
 )
 
 func runUnusedAssets(cmd *cobra.Command, args []string) error {
+	if err := RequireVault(); err != nil {
+		return err
+	}
+
 	if unusedFormat == "text" {
 		printScanHeader("Scanning for unused assets")
 	}

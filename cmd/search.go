@@ -64,6 +64,10 @@ type SearchResult struct {
 }
 
 func runSearch(cmd *cobra.Command, args []string) error {
+	if err := RequireVault(); err != nil {
+		return err
+	}
+
 	query := args[0]
 
 	if searchFormat == "text" {

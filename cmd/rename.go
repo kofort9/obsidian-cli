@@ -65,6 +65,10 @@ type RenameResult struct {
 }
 
 func runRename(cmd *cobra.Command, args []string) error {
+	if err := RequireVault(); err != nil {
+		return err
+	}
+
 	oldName := strings.TrimSuffix(args[0], ".md")
 	newName := strings.TrimSuffix(args[1], ".md")
 

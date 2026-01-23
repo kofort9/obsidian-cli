@@ -38,6 +38,10 @@ func init() {
 }
 
 func runOrphans(cmd *cobra.Command, args []string) error {
+	if err := RequireVault(); err != nil {
+		return err
+	}
+
 	if orphansFormat == "text" {
 		printScanHeader("Scanning vault")
 	}

@@ -69,6 +69,10 @@ var (
 )
 
 func runTags(cmd *cobra.Command, args []string) error {
+	if err := RequireVault(); err != nil {
+		return err
+	}
+
 	if tagsFormat == "text" {
 		printScanHeader("Scanning tags")
 	}
